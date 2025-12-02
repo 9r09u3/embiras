@@ -39,6 +39,7 @@ interface Review {
   staff_count: number;
   wait_time: number;
   approved: boolean;
+  created_at?: string;
   [key: string]: any;
 }
 
@@ -97,6 +98,8 @@ export default function Page() {
   const [reviews, setReviews] = useState<Review[]>([]);
   const [selectedPoint, setSelectedPoint] = useState<Position | null>(null);
   const [addMode, setAddMode] = useState(false);
+  const [userLocation, setUserLocation] = useState<Position | null>(null);
+  const [reviewViewMode, setReviewViewMode] = useState<'form' | 'reviews'>('form');
 
   const [searchQuery, setSearchQuery] = useState("");
   const [suggestions, setSuggestions] = useState<Establishment[]>([]);
@@ -114,6 +117,31 @@ export default function Page() {
   const [reviewTarget, setReviewTarget] = useState<string | null>(null);
   const [selectedEstablishment, setSelectedEstablishment] = useState<Establishment | null>(null);
   const [searchResultEstablishment, setSearchResultEstablishment] = useState<Establishment | null>(null);
+
+  useEffect(() => {
+    if (tab === "map" && navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          setUserLocation({
+            lat: position.coords.latitude,
+            lng: position.coords.longitude
+          });
+        },
+        (error) => {
+          console.warn("Erro ao obter localização:", error.message);
+          setUserLocation({
+            lat: -16.6869,
+            lng: -49.2648
+          });
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 5000,
+          maximumAge: 0
+        }
+      );
+    }
+  }, [tab]);
 
   async function loadAll() {
     try {
@@ -174,7 +202,6 @@ export default function Page() {
     setSuggestions([]);
     setSearchExpanded(false);
     
-    // Mostrar o estabelecimento encontrado mesmo se filtros não permitirem
     setSearchResultEstablishment(establishment);
     
     setTimeout(() => {
@@ -192,11 +219,9 @@ export default function Page() {
     }
   }, [selectedEstablishment]);
 
-  // Limpar estabelecimento da busca quando clicar em outro lugar
   const handleMapClick = useCallback((position: Position) => {
     setSelectedPoint(position);
-    setSearchResultEstablishment(null); // Limpar resultado da busca
-    // NÃO seta addMode como true aqui - só abre popup no mapa
+    setSearchResultEstablishment(null); 
   }, []);
 
   const handleOpenAddModal = () => {
@@ -208,6 +233,24 @@ export default function Page() {
     setAddMode(false);
     setSelectedPoint(null);
   };
+
+  const handleViewReviews = useCallback((establishmentId: string) => {
+    console.log("Abrindo ver avaliações para:", establishmentId);
+    setReviewTarget(establishmentId);
+    setReviewViewMode('reviews');
+  }, []);
+
+  const handleRequestReview = useCallback((establishmentId: string) => {
+    console.log("Abrindo nova avaliação para:", establishmentId);
+    setReviewTarget(establishmentId);
+    setReviewViewMode('form');
+  }, []);
+
+  const handleCloseReviewPanel = useCallback(() => {
+    console.log("Fechando ReviewPanel, resetando modo para 'form'");
+    setReviewTarget(null);
+    setReviewViewMode('form');
+  }, []);
 
   const submitPendingEstablishmentAndOptionalReview = async (
     name: string, 
@@ -298,7 +341,6 @@ export default function Page() {
 
       setSelectedPoint(null);
       setAddMode(false);
-      // Recarregar dados para atualizar lista
       loadAll();
       
     } catch (error: any) {
@@ -350,7 +392,6 @@ export default function Page() {
       console.log("Review enviada com sucesso!");
       alert("Avaliação enviada para moderação!");
       setReviewTarget(null);
-      // Recarregar dados para atualizar contagem de avaliações
       loadAll();
       
     } catch (error: any) {
@@ -382,11 +423,9 @@ export default function Page() {
     return list;
   }
 
-  // Lista para o mapa: filtros normais + estabelecimento da busca (se existir)
   function getMapEstablishments(): Establishment[] {
     const filteredList = getFilteredList();
     
-    // Se temos um resultado de busca específico, adiciona ele à lista mesmo se não passar nos filtros
     if (searchResultEstablishment && !filteredList.some(e => e.id === searchResultEstablishment.id)) {
       return [...filteredList, searchResultEstablishment];
     }
@@ -402,7 +441,6 @@ export default function Page() {
     <div style={{ height: "100vh", width: "100%", position: "relative" }}>
       {tab === "map" && (
         <>
-          {/* Barra superior esquerda com ícones */}
           <div style={{ 
             position: "absolute", 
             top: 12, 
@@ -413,7 +451,6 @@ export default function Page() {
             flexDirection: "column",
             alignItems: "flex-start"
           }}>
-            {/* Botão de busca */}
             <div style={{ 
               background: "white", 
               borderRadius: 12, 
@@ -466,7 +503,6 @@ export default function Page() {
               </button>
             </div>
 
-            {/* Botão de filtros */}
             <button
               onClick={() => setFiltersExpanded(!filtersExpanded)}
               style={{ 
@@ -484,15 +520,50 @@ export default function Page() {
             >
               ⚙️
             </button>
+
+            {userLocation && (
+              <button
+                onClick={() => {
+                  if (userLocation) {
+                    setSelectedEstablishment({
+                      id: "user-location",
+                      name: "Sua localização",
+                      address: "",
+                      lat: userLocation.lat,
+                      lng: userLocation.lng,
+                      has_water: false,
+                      has_bathroom: false,
+                      has_power: false,
+                      final_score: null,
+                      reviews_count: 0
+                    });
+                  }
+                }}
+                style={{ 
+                  padding: "12px", 
+                  background: "white", 
+                  borderRadius: 12, 
+                  border: "none", 
+                  boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+                  cursor: "pointer",
+                  minWidth: 48,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center"
+                }}
+                title="Ir para minha localização"
+              >
+                📍
+              </button>
+            )}
           </div>
 
-          {/* Painel de filtros expansível */}
           {filtersExpanded && (
             <div style={{ 
               position: "absolute", 
               top: 12, 
               left: 12, 
-              zIndex: 1001, // Z-index maior para ficar na frente
+              zIndex: 1001,
               background: "white", 
               borderRadius: 12, 
               padding: 16, 
@@ -501,7 +572,6 @@ export default function Page() {
               maxHeight: "calc(100vh - 100px)",
               overflow: "auto"
             }}>
-              {/* Botão X para fechar */}
               <button
                 onClick={() => setFiltersExpanded(false)}
                 style={{
@@ -529,7 +599,6 @@ export default function Page() {
 
               <h4 style={{ marginBottom: 12, fontSize: 16, fontWeight: "bold", paddingRight: 24 }}>Filtros</h4>
               
-              {/* Filtros de avaliação */}
               <div style={{ marginBottom: 16 }}>
                 <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 8, color: "#374151" }}>Avaliação</div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -552,7 +621,6 @@ export default function Page() {
                 </div>
               </div>
 
-              {/* Filtros de infraestrutura */}
               <div>
                 <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 8, color: "#374151" }}>Infraestrutura</div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -583,7 +651,6 @@ export default function Page() {
                 </div>
               </div>
 
-              {/* Botão para limpar filtros */}
               <button
                 onClick={() => setFilters({ 
                   has_water: false, 
@@ -609,7 +676,6 @@ export default function Page() {
             </div>
           )}
 
-          {/* Sugestões de busca */}
           {searchExpanded && suggestions.length > 0 && (
             <div style={{ 
               position: "absolute", 
@@ -647,17 +713,18 @@ export default function Page() {
             </div>
           )}
 
-          {/* Mapa */}
           <LeafletMap
-            establishments={getMapEstablishments()} // Usa a nova função
+            establishments={getMapEstablishments()}
             selectedPoint={selectedPoint}
             onMapClick={handleMapClick}
-            onRequestReview={(id: string) => setReviewTarget(id)}
+            onRequestReview={handleRequestReview}
+            onViewReviews={handleViewReviews}
             selectedEstablishment={selectedEstablishment}
             onEstablishmentOpened={() => setSelectedEstablishment(null)}
             showAddModal={addMode}
             onCloseAddModal={handleCloseAddModal}
             onSubmitAddModal={submitPendingEstablishmentAndOptionalReview}
+            userLocation={userLocation}
           />
         </>
       )}
@@ -668,10 +735,11 @@ export default function Page() {
 
       <ReviewPanel
         targetId={reviewTarget}
-        onClose={() => setReviewTarget(null)}
+        onClose={handleCloseReviewPanel}
         onSubmit={handleSubmitReviewForApproved}
         reviews={reviews}
         establishments={establishments}
+        initialView={reviewViewMode}
       />
     </div>
   );

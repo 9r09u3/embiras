@@ -31,6 +31,7 @@ interface LeafletMapProps {
   selectedPoint?: Position | null;
   onMapClick?: (pos: Position) => void;
   onRequestReview?: (id: string) => void;
+  onViewReviews?: (id: string) => void;
   selectedEstablishment?: Establishment | null;
   onEstablishmentOpened?: () => void;
   showAddModal?: boolean;
@@ -42,6 +43,7 @@ interface LeafletMapProps {
     wantToReview: boolean, 
     reviewData?: any
   ) => Promise<void>;
+  userLocation?: Position | null;
 }
 
 interface MapControllerProps {
@@ -49,6 +51,7 @@ interface MapControllerProps {
   onEstablishmentOpened?: () => void;
   selectedPoint?: Position | null;
   onOpenAddModal?: () => void;
+  userLocation?: Position | null;
 }
 
 interface MapClickHandlerProps {
@@ -64,11 +67,60 @@ if (typeof window !== "undefined") {
   });
 }
 
+const createUserLocationIcon = () => {
+  return L.divIcon({
+    className: "user-location-marker",
+    html: `<div style="
+      background: #3b82f6;
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-size: 20px;
+      font-weight: 700;
+      box-shadow: 0 4px 12px rgba(59, 130, 246, 0.5);
+      border: 3px solid white;
+      animation: pulse 2s infinite;
+    ">
+      <div style="
+        background: white;
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+      "></div>
+    </div>`,
+    iconSize: [40, 40],
+    iconAnchor: [20, 40],
+  });
+};
+
+if (typeof window !== "undefined") {
+  const style = document.createElement('style');
+  style.textContent = `
+    @keyframes pulse {
+      0% {
+        box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.7);
+      }
+      70% {
+        box-shadow: 0 0 0 10px rgba(59, 130, 246, 0);
+      }
+      100% {
+        box-shadow: 0 0 0 0 rgba(59, 130, 246, 0);
+      }
+    }
+  `;
+  document.head.appendChild(style);
+}
+
 function MapController({ 
   selectedEstablishment, 
   onEstablishmentOpened,
   selectedPoint,
-  onOpenAddModal 
+  onOpenAddModal,
+  userLocation
 }: MapControllerProps) {
   const map = useMap();
   const [lastSelectedId, setLastSelectedId] = useState<string | null>(null);
@@ -148,22 +200,41 @@ function MapController({
         
         <div style="font-size: 14px; color: #555; margin-bottom: 12px;">${facilities}</div>
         
-        <button 
-          onclick="window.dispatchEvent(new CustomEvent('requestReview', { detail: '${id}' }))"
-          style="
-            padding: 10px 16px;
-            background: #ff8c42;
-            color: white;
-            border: none;
-            border-radius: 8px;
-            font-weight: 700;
-            width: 100%;
-            cursor: pointer;
-            font-size: 14px;
-          "
-        >
-          📝 Avaliar este local
-        </button>
+        <div style="display: flex; flex-direction: column; gap: 8px;">
+          <button 
+            onclick="window.dispatchEvent(new CustomEvent('requestReview', { detail: '${id}' }))"
+            style="
+              padding: 10px 16px;
+              background: #ff8c42;
+              color: white;
+              border: none;
+              border-radius: 8px;
+              font-weight: 700;
+              width: 100%;
+              cursor: pointer;
+              font-size: 14px;
+            "
+          >
+            📝 Avaliar este local
+          </button>
+          
+          <button 
+            onclick="window.dispatchEvent(new CustomEvent('viewReviews', { detail: '${id}' }))"
+            style="
+              padding: 10px 16px;
+              background: #3b82f6;
+              color: white;
+              border: none;
+              border-radius: 8px;
+              font-weight: 700;
+              width: 100%;
+              cursor: pointer;
+              font-size: 14px;
+            "
+          >
+            👁️ Ver avaliações (${reviews_count || 0})
+          </button>
+        </div>
       </div>
     `;
 
@@ -173,7 +244,6 @@ function MapController({
       .openOn(map);
   };
 
-  // Criar popup para adicionar estabelecimento
   const createAddEstablishmentPopup = useCallback(() => {
     if (!selectedPoint) return;
 
@@ -229,15 +299,32 @@ function MapController({
 
   useEffect(() => {
     if (selectedEstablishment) {
-      openEstablishmentPopup(selectedEstablishment);
+      if (selectedEstablishment.id === "user-location") {
+        map.flyTo([selectedEstablishment.lat, selectedEstablishment.lng], 16, {
+          duration: 1,
+          easeLinearity: 0.25
+        });
+      } else {
+        openEstablishmentPopup(selectedEstablishment);
+      }
     }
-  }, [selectedEstablishment, openEstablishmentPopup]);
+  }, [selectedEstablishment, openEstablishmentPopup, map]);
 
   useEffect(() => {
     if (selectedPoint) {
       createAddEstablishmentPopup();
     }
   }, [selectedPoint, createAddEstablishmentPopup]);
+
+  useEffect(() => {
+    if (userLocation && map) {
+      const timer = setTimeout(() => {
+        map.setView([userLocation.lat, userLocation.lng], 14);
+      }, 1000);
+      
+      return () => clearTimeout(timer);
+    }
+  }, [userLocation, map]);
 
   return null;
 }
@@ -290,6 +377,10 @@ interface RequestReviewEvent extends CustomEvent {
   detail: string;
 }
 
+interface ViewReviewsEvent extends CustomEvent {
+  detail: string;
+}
+
 interface OpenAddModalEvent extends CustomEvent {}
 interface CloseAddPopupEvent extends CustomEvent {}
 
@@ -298,11 +389,13 @@ export default function LeafletMap({
   selectedPoint,
   onMapClick,
   onRequestReview,
+  onViewReviews,
   selectedEstablishment,
   onEstablishmentOpened,
   showAddModal = false,
   onCloseAddModal,
   onSubmitAddModal,
+  userLocation,
 }: LeafletMapProps) {
   const mapRef = useRef<L.Map | null>(null);
   const [isMapReady, setIsMapReady] = useState(false);
@@ -312,6 +405,11 @@ export default function LeafletMap({
     const handleReviewRequest = (event: Event) => {
       const customEvent = event as RequestReviewEvent;
       onRequestReview?.(customEvent.detail);
+    };
+
+    const handleViewReviews = (event: Event) => {
+      const customEvent = event as ViewReviewsEvent;
+      onViewReviews?.(customEvent.detail);
     };
 
     const handleOpenAddModal = (event: Event) => {
@@ -328,17 +426,18 @@ export default function LeafletMap({
     };
 
     window.addEventListener('requestReview', handleReviewRequest);
+    window.addEventListener('viewReviews', handleViewReviews);
     window.addEventListener('openAddModal', handleOpenAddModal);
     window.addEventListener('closeAddPopup', handleCloseAddPopup);
     
     return () => {
       window.removeEventListener('requestReview', handleReviewRequest);
+      window.removeEventListener('viewReviews', handleViewReviews);
       window.removeEventListener('openAddModal', handleOpenAddModal);
       window.removeEventListener('closeAddPopup', handleCloseAddPopup);
     };
-  }, [onRequestReview, onCloseAddModal]);
+  }, [onRequestReview, onViewReviews, onCloseAddModal]);
 
-  // Resetar o modal local quando o prop showAddModal mudar
   useEffect(() => {
     setLocalShowAddModal(showAddModal);
   }, [showAddModal]);
@@ -441,6 +540,7 @@ export default function LeafletMap({
           selectedEstablishment={selectedEstablishment} 
           onEstablishmentOpened={onEstablishmentOpened}
           selectedPoint={selectedPoint}
+          userLocation={userLocation}
         />
 
         <div className="leaflet-top leaflet-right">
@@ -470,7 +570,22 @@ export default function LeafletMap({
           </div>
         </div>
 
-        {/* Marcador temporário para posição selecionada */}
+        {userLocation && (
+          <Marker
+            position={[userLocation.lat, userLocation.lng]}
+            icon={createUserLocationIcon()}
+          >
+            <Popup>
+              <div style={{ padding: 8 }}>
+                <strong style={{ fontSize: 14 }}>Sua localização</strong>
+                <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
+                  Você está aqui!
+                </div>
+              </div>
+            </Popup>
+          </Marker>
+        )}
+
         {selectedPoint && (
           <Marker
             position={[selectedPoint.lat, selectedPoint.lng]}
@@ -515,22 +630,41 @@ export default function LeafletMap({
 
                     <div style={{ fontSize: 14, color: "#555", marginBottom: 12 }}>{facilities}</div>
 
-                    <button
-                      onClick={() => onRequestReview?.(id)}
-                      style={{
-                        padding: "10px 16px",
-                        background: "#ff8c42",
-                        color: "white",
-                        border: "none",
-                        borderRadius: 8,
-                        fontWeight: 700,
-                        width: "100%",
-                        cursor: "pointer",
-                        fontSize: 14
-                      }}
-                    >
-                      📝 Avaliar este local
-                    </button>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                      <button
+                        onClick={() => onRequestReview?.(id)}
+                        style={{
+                          padding: "10px 16px",
+                          background: "#ff8c42",
+                          color: "white",
+                          border: "none",
+                          borderRadius: 8,
+                          fontWeight: 700,
+                          width: "100%",
+                          cursor: "pointer",
+                          fontSize: 14
+                        }}
+                      >
+                        📝 Avaliar este local
+                      </button>
+                      
+                      <button
+                        onClick={() => onViewReviews?.(id)}
+                        style={{
+                          padding: "10px 16px",
+                          background: "#3b82f6",
+                          color: "white",
+                          border: "none",
+                          borderRadius: 8,
+                          fontWeight: 700,
+                          width: "100%",
+                          cursor: "pointer",
+                          fontSize: 14
+                        }}
+                      >
+                        👁️ Ver avaliações ({reviews_count || 0})
+                      </button>
+                    </div>
                   </div>
                 </Popup>
               </Marker>
@@ -539,7 +673,6 @@ export default function LeafletMap({
         </MarkerClusterGroup>
       </MapContainer>
 
-      {/* Modal para adicionar estabelecimento - SÓ ABRE QUANDO localShowAddModal É true */}
       {localShowAddModal && selectedPoint && (
         <div style={{
           position: "fixed",
