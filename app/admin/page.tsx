@@ -7,7 +7,8 @@ export default function AdminPage() {
   const [user, setUser] = useState<any>(null);
   const [pendingEsts, setPendingEsts] = useState<any[]>([]);
   const [pendingRvs, setPendingRvs] = useState<any[]>([]);
-  const [tab, setTab] = useState<"establishments"|"reviews"|"search">("establishments");
+  const [rejectedRvs, setRejectedRvs] = useState<any[]>([]);
+  const [tab, setTab] = useState<"establishments"|"reviews"|"rejected"|"search">("establishments");
   const [loading, setLoading] = useState(false);
   const [actionInProgress, setActionInProgress] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
@@ -32,7 +33,6 @@ export default function AdminPage() {
     }
 
     if (!userToCheck.email) {
-      console.warn('Usuário sem email tentou acessar admin');
       await supabase.auth.signOut();
       setUser(null);
       return;
@@ -56,7 +56,6 @@ export default function AdminPage() {
       if (result.isAdmin) {
         setUser(userToCheck);
       } else {
-        console.warn(`🚨 Usuário não autorizado tentou acessar: ${userToCheck.email}`);
         await supabase.auth.signOut();
         setUser(null);
         
@@ -65,7 +64,6 @@ export default function AdminPage() {
         }
       }
     } catch (error) {
-      console.error("Erro ao verificar admin:", error);
       await supabase.auth.signOut();
       setUser(null);
       
@@ -108,14 +106,12 @@ export default function AdminPage() {
       });
       
       if (error) {
-        console.error("Erro de login:", error);
         alert("Erro ao enviar link de acesso. Tente novamente.");
         return;
       }
       
       alert("Link de acesso enviado para seu email. Verifique sua caixa de entrada.");
     } catch (error) {
-      console.error("Erro no processo de login:", error);
       alert("Erro no processo de login. Tente novamente.");
     }
   }
@@ -125,29 +121,31 @@ export default function AdminPage() {
     setUser(null); 
   }
 
-  async function loadPending(){
+  async function loadAll() {
     if (!user) return;
     
     setLoading(true);
     try {
-      const [{ data: ests, error: e1 }, { data: rvs, error: e2 }] = await Promise.all([
+      const [{ data: ests, error: e1 }, { data: rvs, error: e2 }, { data: rejectedData, error: e3 }] = await Promise.all([
         supabase.from("pending_establishments").select("*").order("created_at",{ascending:true}).limit(100),
-        supabase.from("reviews").select("*, establishments(name)").eq("approved", false).order("created_at",{ascending:true}).limit(100)
+        supabase.from("reviews").select("*, establishments(name)").eq("approved", false).is("moderated_by", null).order("created_at",{ascending:true}).limit(100),
+        supabase.from("reviews").select("*, establishments(name)").eq("approved", false).not("moderated_by", "is", null).order("moderated_at",{ascending:false}).limit(100)
       ]);
       
       if(e1) {
-        console.error("Erro ao carregar estabelecimentos:", e1);
         alert("Erro ao carregar estabelecimentos pendentes.");
       }
       if(e2) {
-        console.error("Erro ao carregar avaliações:", e2);
         alert("Erro ao carregar avaliações pendentes.");
+      }
+      if(e3) {
+        alert("Erro ao carregar avaliações rejeitadas.");
       }
       
       setPendingEsts(ests || []);
       setPendingRvs(rvs || []);
+      setRejectedRvs(rejectedData || []);
     } catch (error) {
-      console.error("Erro inesperado:", error);
       alert("Erro ao carregar dados.");
     } finally {
       setLoading(false);
@@ -155,14 +153,14 @@ export default function AdminPage() {
   }
 
   useEffect(()=> { 
-    if(user) loadPending(); 
+    if(user) loadAll(); 
     else { 
       setPendingEsts([]); 
       setPendingRvs([]); 
+      setRejectedRvs([]);
     } 
   }, [user]);
 
-  // NOVA FUNÇÃO: Aprovar todos os estabelecimentos de uma vez
   async function approveAllEsts() {
     if (!pendingEsts.length) {
       alert("Não há estabelecimentos para aprovar.");
@@ -199,14 +197,12 @@ export default function AdminPage() {
         alert("Erro ao aprovar estabelecimentos: " + (result.error || "Erro desconhecido"));
       }
     } catch (error) {
-      console.error("Erro ao aprovar todos os estabelecimentos:", error);
       alert("Erro ao aprovar estabelecimentos.");
     } finally {
       setActionInProgress(null);
     }
   }
 
-  // NOVA FUNÇÃO: Aprovar todas as avaliações de uma vez
   async function approveAllReviews() {
     if (!pendingRvs.length) {
       alert("Não há avaliações para aprovar.");
@@ -233,7 +229,6 @@ export default function AdminPage() {
       setPendingRvs([]);
       alert(`✅ Aprovadas ${pendingRvs.length} avaliações.`);
     } catch (error) {
-      console.error("Erro ao aprovar todas as avaliações:", error);
       alert("Erro ao aprovar avaliações.");
     } finally {
       setActionInProgress(null);
@@ -269,34 +264,42 @@ export default function AdminPage() {
         alert("Erro ao aprovar estabelecimento: " + (result.error || "Erro desconhecido"));
       }
     } catch (error) {
-      console.error("Erro ao aprovar estabelecimento:", error);
       alert("Erro ao aprovar estabelecimento. Tente novamente.");
     } finally {
       setActionInProgress(null);
     }
   }
 
-  async function rejectEst(pendingId: string){
+  async function rejectEst(pendingId: string) {
     if (actionInProgress) return;
-    setActionInProgress(`reject-est-${pendingId}`);
     
-    if(!confirm("Deseja realmente rejeitar este estabelecimento?")) {
-      setActionInProgress(null);
+    if (!confirm("Deseja realmente rejeitar este estabelecimento?")) {
       return;
     }
 
+    setActionInProgress(`reject-est-${pendingId}`);
+
     try {
+      // Primeiro remove do banco de dados
       const { error } = await supabase
         .from("pending_establishments")
         .delete()
         .eq("id", pendingId);
 
-      if(error) throw error;
+      if (error) {
+        console.error("Erro ao deletar do banco:", error);
+        throw error;
+      }
 
+      // Se a exclusão do banco foi bem-sucedida, remove do estado local
       setPendingEsts(prev => prev.filter(p => p.id !== pendingId));
+      alert("Estabelecimento rejeitado com sucesso!");
+      
     } catch (error) {
-      console.error("Erro ao rejeitar estabelecimento:", error);
+      console.error("Erro completo:", error);
       alert("Erro ao rejeitar estabelecimento. Tente novamente.");
+      // Recarrega os dados para sincronizar com o banco
+      await loadAll();
     } finally {
       setActionInProgress(null);
     }
@@ -321,7 +324,6 @@ export default function AdminPage() {
 
       setPendingRvs(prev => prev.filter(r => r.id !== reviewId));
     } catch (error) {
-      console.error("Erro ao aprovar avaliação:", error);
       alert("Erro ao aprovar avaliação. Tente novamente.");
     } finally {
       setActionInProgress(null);
@@ -332,6 +334,12 @@ export default function AdminPage() {
     if (actionInProgress) return;
     setActionInProgress(`reject-review-${reviewId}`);
     
+    const reason = prompt("Motivo da rejeição:") || "Sem motivo especificado";
+    if (reason === null) {
+      setActionInProgress(null);
+      return;
+    }
+
     if(!confirm("Deseja realmente rejeitar esta avaliação?")) {
       setActionInProgress(null);
       return;
@@ -345,22 +353,25 @@ export default function AdminPage() {
           approved: false, 
           moderated_by: moderator, 
           moderated_at: new Date().toISOString(), 
-          moderator_note: "Rejeitado pelo admin" 
+          moderator_note: reason 
         })
         .eq("id", reviewId);
 
       if(error) throw error;
 
       setPendingRvs(prev => prev.filter(r => r.id !== reviewId));
+      
+      setTimeout(() => {
+        loadAll();
+      }, 500);
+      
     } catch (error) {
-      console.error("Erro ao rejeitar avaliação:", error);
       alert("Erro ao rejeitar avaliação. Tente novamente.");
     } finally {
       setActionInProgress(null);
     }
   }
 
-  // FUNÇÃO: Buscar estabelecimentos
   async function searchEstablishments() {
     if (!searchTerm.trim()) {
       alert("Digite um termo para buscar");
@@ -378,14 +389,12 @@ export default function AdminPage() {
       if (error) throw error;
       setSearchResults(data || []);
     } catch (error) {
-      console.error("Erro na busca:", error);
       alert("Erro ao buscar estabelecimentos.");
     } finally {
       setSearchLoading(false);
     }
   }
 
-  // FUNÇÃO: Atualizar estabelecimento
   async function updateEstablishment() {
     if (!editingEst) return;
 
@@ -407,25 +416,21 @@ export default function AdminPage() {
 
       alert("Estabelecimento atualizado com sucesso!");
       setEditingEst(null);
-      await searchEstablishments(); // Atualiza os resultados da busca
+      await searchEstablishments();
     } catch (error) {
-      console.error("Erro ao atualizar:", error);
       alert("Erro ao atualizar estabelecimento.");
     }
   }
 
-  // NOVA FUNÇÃO: Deletar estabelecimento
   async function deleteEstablishment(establishmentId: string) {
-    if (!establishmentId) return;
-    
-    if (!confirm("ATENÇÃO: Tem certeza que deseja deletar este estabelecimento?\n\nEsta ação é irreversível e também deletará todas as avaliações relacionadas a ele.")) {
+    if (!confirm("ATENÇÃO: Esta ação é irreversível!\n\nDeseja realmente deletar este estabelecimento permanentemente?\n\nIsso também removerá todas as avaliações associadas a ele.")) {
       return;
     }
 
     setActionInProgress(`delete-est-${establishmentId}`);
-    
+
     try {
-      // Primeiro deleta as avaliações relacionadas
+      // Primeiro, deletar todas as avaliações associadas ao estabelecimento
       const { error: reviewsError } = await supabase
         .from("reviews")
         .delete()
@@ -433,26 +438,33 @@ export default function AdminPage() {
 
       if (reviewsError) {
         console.error("Erro ao deletar avaliações:", reviewsError);
-        // Continua mesmo com erro nas avaliações, tenta deletar o estabelecimento
+        // Continuar mesmo se houver erro nas avaliações
       }
 
-      // Depois deleta o estabelecimento
-      const { error } = await supabase
+      // Depois, deletar o estabelecimento
+      const { error: establishmentError } = await supabase
         .from("establishments")
         .delete()
         .eq("id", establishmentId);
 
-      if (error) throw error;
+      if (establishmentError) {
+        console.error("Erro ao deletar estabelecimento:", establishmentError);
+        throw establishmentError;
+      }
 
-      alert("✅ Estabelecimento deletado com sucesso!");
-      
-      // Remove da lista de resultados
+      // Remover do estado local
       setSearchResults(prev => prev.filter(est => est.id !== establishmentId));
-      setEditingEst(null);
+      
+      // Se estiver editando, limpar o estado de edição
+      if (editingEst?.id === establishmentId) {
+        setEditingEst(null);
+      }
+
+      alert("✅ Estabelecimento deletado permanentemente!");
       
     } catch (error) {
       console.error("Erro ao deletar estabelecimento:", error);
-      alert("Erro ao deletar estabelecimento.");
+      alert("❌ Erro ao deletar estabelecimento. Tente novamente.");
     } finally {
       setActionInProgress(null);
     }
@@ -533,6 +545,20 @@ export default function AdminPage() {
           Avaliações Pendentes ({pendingRvs.length})
         </button>
         <button 
+          onClick={()=>setTab("rejected")} 
+          style={{ 
+            padding: '12px 20px', 
+            background: tab==="rejected" ? "#10b981" : "#6b7280", 
+            color:"#fff", 
+            border:"none", 
+            borderRadius:8,
+            cursor: 'pointer',
+            fontWeight: 'bold'
+          }}
+        >
+          Rejeitadas ({rejectedRvs.length})
+        </button>
+        <button 
           onClick={()=>setTab("search")} 
           style={{ 
             padding: '12px 20px', 
@@ -547,7 +573,6 @@ export default function AdminPage() {
           Buscar/Editar Estabelecimentos
         </button>
         
-        {/* Botões de aprovação em massa - aparecem apenas quando há itens */}
         {tab === "establishments" && pendingEsts.length > 0 && (
           <button 
             onClick={approveAllEsts} 
@@ -702,11 +727,6 @@ export default function AdminPage() {
                       {r.has_bathroom && ' • 🚻'}
                       {r.has_power && ' • 🔌'}
                     </div>
-                    {r.moderator_note && (
-                      <div style={{ fontSize: 12, color: '#ef4444', marginTop: 4 }}>
-                        Observação: {r.moderator_note}
-                      </div>
-                    )}
                     <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 8 }}>
                       Enviado em: {new Date(r.created_at).toLocaleString('pt-BR')}
                     </div>
@@ -744,6 +764,56 @@ export default function AdminPage() {
                         {actionInProgress === `reject-review-${r.id}` ? 'Rejeitando...' : 'Rejeitar'}
                       </button>
                     </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {tab==="rejected" && (
+          <div>
+            <h3 style={{ marginBottom: 16 }}>Avaliações Rejeitadas (Log)</h3>
+            {rejectedRvs.length===0 && (
+              <div style={{ 
+                padding: 40, 
+                textAlign: 'center', 
+                color: '#6b7280',
+                background: '#f9fafb',
+                borderRadius: 8
+              }}>
+                Nenhuma avaliação rejeitada.
+              </div>
+            )}
+            {rejectedRvs.map(r=>(
+              <div key={r.id} style={{ 
+                background: '#fef2f2', 
+                padding: 16, 
+                borderRadius: 8, 
+                marginBottom: 12,
+                border: '1px solid #fecaca'
+              }}>
+                <div style={{ flex: 1 }}>
+                  <strong style={{ fontSize: 16, display: 'block', marginBottom: 8 }}>
+                    Estabelecimento: {r.establishments?.name || `ID: ${r.establishment_id || "Pendente"}`}
+                  </strong>
+                  <div style={{ fontSize: 14, color: '#6b7280', marginBottom: 8 }}>
+                    {r.comment || 'Sem comentário'}
+                  </div>
+                  <div style={{ fontSize: 12, color: '#9ca3af' }}>
+                    ⭐ {r.service_rating ?? r.rating} • ⏱️ {r.wait_time} min • 👥 {r.staff_count} func.
+                    {r.has_water && ' • 💧'}
+                    {r.has_bathroom && ' • 🚻'}
+                    {r.has_power && ' • 🔌'}
+                  </div>
+                  {r.moderator_note && (
+                    <div style={{ fontSize: 12, color: '#ef4444', marginTop: 4, fontWeight: 'bold' }}>
+                      ❌ Motivo da rejeição: {r.moderator_note}
+                    </div>
+                  )}
+                  <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 8 }}>
+                    Enviado em: {new Date(r.created_at).toLocaleString('pt-BR')} • 
+                    Rejeitado em: {new Date(r.moderated_at).toLocaleString('pt-BR')} por {r.moderated_by}
                   </div>
                 </div>
               </div>
@@ -817,6 +887,26 @@ export default function AdminPage() {
                             style={{ width: '100%', padding: '8px', border: '1px solid #d1d5db', borderRadius: 4 }}
                           />
                         </div>
+                        <div style={{ marginBottom: 12 }}>
+                          <label style={{ display: 'block', marginBottom: 4 }}>Latitude</label>
+                          <input
+                            type="number"
+                            step="any"
+                            value={editingEst.lat}
+                            onChange={(e) => setEditingEst({...editingEst, lat: parseFloat(e.target.value) || 0})}
+                            style={{ width: '100%', padding: '8px', border: '1px solid #d1d5db', borderRadius: 4 }}
+                          />
+                        </div>
+                        <div style={{ marginBottom: 12 }}>
+                          <label style={{ display: 'block', marginBottom: 4 }}>Longitude</label>
+                          <input
+                            type="number"
+                            step="any"
+                            value={editingEst.lng}
+                            onChange={(e) => setEditingEst({...editingEst, lng: parseFloat(e.target.value) || 0})}
+                            style={{ width: '100%', padding: '8px', border: '1px solid #d1d5db', borderRadius: 4 }}
+                          />
+                        </div>
                         <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
                           <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                             <input
@@ -843,54 +933,52 @@ export default function AdminPage() {
                             🔌 Energia
                           </label>
                         </div>
-                        <div style={{ display: 'flex', gap: 8, justifyContent: 'space-between' }}>
+                        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
                           <button 
-                            onClick={() => deleteEstablishment(editingEst.id)}
-                            disabled={actionInProgress === `delete-est-${editingEst.id}`}
+                            onClick={() => setEditingEst(null)}
                             style={{ 
                               padding: '8px 16px', 
-                              background: actionInProgress === `delete-est-${editingEst.id}` ? '#9ca3af' : '#ef4444', 
+                              background: '#6b7280', 
                               color: 'white', 
                               border: 'none', 
                               borderRadius: 6,
-                              cursor: actionInProgress === `delete-est-${editingEst.id}` ? 'not-allowed' : 'pointer'
+                              cursor: 'pointer'
                             }}
                           >
-                            {actionInProgress === `delete-est-${editingEst.id}` ? 'Deletando...' : '🗑️ Deletar'}
+                            Cancelar
                           </button>
-                          <div style={{ display: 'flex', gap: 8 }}>
-                            <button 
-                              onClick={() => setEditingEst(null)}
-                              style={{ 
-                                padding: '8px 16px', 
-                                background: '#6b7280', 
-                                color: 'white', 
-                                border: 'none', 
-                                borderRadius: 6,
-                                cursor: 'pointer'
-                              }}
-                            >
-                              Cancelar
-                            </button>
-                            <button 
-                              onClick={updateEstablishment}
-                              style={{ 
-                                padding: '8px 16px', 
-                                background: '#10b981', 
-                                color: 'white', 
-                                border: 'none', 
-                                borderRadius: 6,
-                                cursor: 'pointer'
-                              }}
-                            >
-                              Salvar
-                            </button>
-                          </div>
+                          <button 
+                            onClick={deleteEstablishment.bind(null, est.id)}
+                            disabled={actionInProgress === `delete-est-${est.id}`}
+                            style={{ 
+                              padding: '8px 16px', 
+                              background: actionInProgress === `delete-est-${est.id}` ? '#9ca3af' : '#ef4444', 
+                              color: 'white', 
+                              border: 'none', 
+                              borderRadius: 6,
+                              cursor: actionInProgress === `delete-est-${est.id}` ? 'not-allowed' : 'pointer'
+                            }}
+                          >
+                            {actionInProgress === `delete-est-${est.id}` ? 'Deletando...' : 'Deletar'}
+                          </button>
+                          <button 
+                            onClick={updateEstablishment}
+                            style={{ 
+                              padding: '8px 16px', 
+                              background: '#10b981', 
+                              color: 'white', 
+                              border: 'none', 
+                              borderRadius: 6,
+                              cursor: 'pointer'
+                            }}
+                          >
+                            Salvar
+                          </button>
                         </div>
                       </div>
                     ) : (
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                        <div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16 }}>
+                        <div style={{ flex: 1 }}>
                           <strong style={{ fontSize: 16, display: 'block', marginBottom: 8 }}>{est.name}</strong>
                           <div style={{ fontSize: 14, color: '#6b7280', marginBottom: 4 }}>{est.address}</div>
                           <div style={{ fontSize: 12, color: '#9ca3af' }}>
@@ -903,19 +991,37 @@ export default function AdminPage() {
                             {est.has_power && '🔌 '}
                           </div>
                         </div>
-                        <button 
-                          onClick={() => setEditingEst(est)}
-                          style={{ 
-                            padding: '8px 16px', 
-                            background: '#3b82f6', 
-                            color: 'white', 
-                            border: 'none', 
-                            borderRadius: 6,
-                            cursor: 'pointer'
-                          }}
-                        >
-                          Editar
-                        </button>
+                        <div style={{ display: 'flex', gap: 8, flexDirection: 'column' }}>
+                          <button 
+                            onClick={() => setEditingEst(est)}
+                            style={{ 
+                              padding: '8px 16px', 
+                              background: '#3b82f6', 
+                              color: 'white', 
+                              border: 'none', 
+                              borderRadius: 6,
+                              cursor: 'pointer',
+                              whiteSpace: 'nowrap'
+                            }}
+                          >
+                            Editar
+                          </button>
+                          <button 
+                            onClick={deleteEstablishment.bind(null, est.id)}
+                            disabled={actionInProgress === `delete-est-${est.id}`}
+                            style={{ 
+                              padding: '8px 16px', 
+                              background: actionInProgress === `delete-est-${est.id}` ? '#9ca3af' : '#ef4444', 
+                              color: 'white', 
+                              border: 'none', 
+                              borderRadius: 6,
+                              cursor: actionInProgress === `delete-est-${est.id}` ? 'not-allowed' : 'pointer',
+                              whiteSpace: 'nowrap'
+                            }}
+                          >
+                            {actionInProgress === `delete-est-${est.id}` ? 'Deletando...' : 'Deletar'}
+                          </button>
+                        </div>
                       </div>
                     )}
                   </div>

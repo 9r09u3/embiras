@@ -12,6 +12,8 @@ export default function ReviewPanel({ targetId, onClose, onSubmit, reviews, esta
   const [hasPower, setHasPower] = useState(false);
   const [viewMode, setViewMode] = useState<'form' | 'reviews'>(initialView);
   const [reviewsPage, setReviewsPage] = useState(1);
+  const [errors, setErrors] = useState<{serviceRating?: string, waitTime?: string}>({});
+  
   const reviewsPerPage = 10;
 
   useEffect(() => {
@@ -24,6 +26,7 @@ export default function ReviewPanel({ targetId, onClose, onSubmit, reviews, esta
     setHasWater(false);
     setHasBathroom(false);
     setHasPower(false);
+    setErrors({});
     
     setReviewsPage(1);
     
@@ -52,8 +55,31 @@ export default function ReviewPanel({ targetId, onClose, onSubmit, reviews, esta
   const paginatedReviews = sortedReviews.slice(0, endIndex);
   const hasMoreReviews = sortedReviews.length > endIndex;
 
+  const validateForm = () => {
+    const newErrors: {serviceRating?: string, waitTime?: string} = {};
+    
+    if (serviceRating === 0) {
+      newErrors.serviceRating = "Avaliação do atendimento é obrigatória";
+    }
+    
+    if (!waitTime.trim()) {
+      newErrors.waitTime = "Tempo de espera é obrigatório";
+    } else if (parseInt(waitTime) <= 0) {
+      newErrors.waitTime = "Tempo de espera deve ser maior que 0";
+    } else if (parseInt(waitTime) > 480) {
+      newErrors.waitTime = "Tempo de espera máximo é 480 minutos (8 horas)";
+    }
+    
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
+
   const handleFormSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    
+    if (!validateForm()) {
+      return;
+    }
     
     const formData = {
       service_rating: serviceRating,
@@ -75,10 +101,23 @@ export default function ReviewPanel({ targetId, onClose, onSubmit, reviews, esta
     setHasWater(false);
     setHasBathroom(false);
     setHasPower(false);
+    setErrors({});
   };
 
   const handleStarClick = (rating: number) => {
     setServiceRating(rating);
+    if (errors.serviceRating) {
+      setErrors(prev => ({...prev, serviceRating: undefined}));
+    }
+  };
+
+  const handleWaitTimeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    setWaitTime(value);
+    
+    if (errors.waitTime) {
+      setErrors(prev => ({...prev, waitTime: undefined}));
+    }
   };
 
   const formatDate = (dateString: string) => {
@@ -116,6 +155,8 @@ export default function ReviewPanel({ targetId, onClose, onSubmit, reviews, esta
   const loadMoreReviews = () => {
     setReviewsPage(prev => prev + 1);
   };
+
+  const isFormValid = serviceRating > 0 && waitTime.trim() !== '' && parseInt(waitTime) > 0 && parseInt(waitTime) <= 480;
 
   return (
     <div style={{
@@ -233,7 +274,7 @@ export default function ReviewPanel({ targetId, onClose, onSubmit, reviews, esta
           <form onSubmit={handleFormSubmit}>
             <div style={{ marginBottom: 16 }}>
               <label style={{ display: 'block', marginBottom: 8, fontWeight: 'bold' }}>
-                Avaliação do atendimento:
+                Avaliação do atendimento: <span style={{color: 'red'}}>*</span>
               </label>
               <div style={{ display: 'flex', gap: 4 }}>
                 {[1, 2, 3, 4, 5].map((star) => (
@@ -257,32 +298,43 @@ export default function ReviewPanel({ targetId, onClose, onSubmit, reviews, esta
               <div style={{ fontSize: 14, color: '#666', marginTop: 4 }}>
                 {serviceRating > 0 ? `Selecionado: ${serviceRating} estrela(s)` : 'Clique para avaliar'}
               </div>
+              {errors.serviceRating && (
+                <div style={{ color: '#ef4444', fontSize: 12, marginTop: 4 }}>
+                  {errors.serviceRating}
+                </div>
+              )}
             </div>
 
             <div style={{ marginBottom: 16 }}>
               <label style={{ display: 'block', marginBottom: 8, fontWeight: 'bold' }}>
-                Tempo de espera (minutos):
+                Tempo de espera (minutos): <span style={{color: 'red'}}>*</span>
               </label>
               <input
                 type="number"
                 value={waitTime}
-                onChange={(e) => setWaitTime(e.target.value)}
-                min="0"
+                onChange={handleWaitTimeChange}
+                min="1"
                 max="480"
+                required
                 style={{
                   width: '100%',
                   padding: '10px 12px',
-                  border: '1px solid #d1d5db',
+                  border: `1px solid ${errors.waitTime ? '#ef4444' : '#d1d5db'}`,
                   borderRadius: 6,
                   fontSize: 14
                 }}
                 placeholder="Ex: 15"
               />
+              {errors.waitTime && (
+                <div style={{ color: '#ef4444', fontSize: 12, marginTop: 4 }}>
+                  {errors.waitTime}
+                </div>
+              )}
             </div>
 
             <div style={{ marginBottom: 16 }}>
               <label style={{ display: 'block', marginBottom: 8, fontWeight: 'bold' }}>
-                Número de funcionários:
+                Número de funcionários (opcional):
               </label>
               <input
                 type="number"
@@ -380,20 +432,23 @@ export default function ReviewPanel({ targetId, onClose, onSubmit, reviews, esta
               </button>
               <button
                 type="submit"
-                disabled={serviceRating === 0}
+                disabled={!isFormValid}
                 style={{
                   padding: '12px 24px',
                   border: 'none',
                   borderRadius: 8,
-                  background: serviceRating === 0 ? '#9ca3af' : '#3b82f6',
+                  background: !isFormValid ? '#9ca3af' : '#3b82f6',
                   color: 'white',
-                  cursor: serviceRating === 0 ? 'not-allowed' : 'pointer',
+                  cursor: !isFormValid ? 'not-allowed' : 'pointer',
                   fontWeight: 'bold',
                   fontSize: 14
                 }}
               >
                 Enviar (moderação)
               </button>
+            </div>
+            <div style={{ fontSize: 12, color: '#6b7280', marginTop: 12, textAlign: 'right' }}>
+              Campos marcados com <span style={{color: 'red'}}>*</span> são obrigatórios
             </div>
           </form>
         )}
@@ -494,10 +549,10 @@ export default function ReviewPanel({ targetId, onClose, onSubmit, reviews, esta
                       
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                          ⏱️ {review.wait_time || 0} min
+                          ⏱️ {review.wait_time || 'N/A'} min
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                          👥 {review.staff_count || 0} pessoas
+                          👥 {review.staff_count || 'N/A'} pessoas
                         </div>
                       </div>
                     </div>
